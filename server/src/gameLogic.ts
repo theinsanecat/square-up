@@ -66,168 +66,172 @@ function generateSquareBoard(size: GameSize) {
   return { dots, validEdges, shapes };
 }
 
-// ── Triangle (Random dots, free-form) board ───────────────────────────────────
-//
-// Dots sit on a staggered grid with a little jitter. Any two nearby dots can be
-// joined as long as the line doesn't pass through another dot or cross a line
-// already on the board. Any three joined dots with no dot inside form a
-// triangle. Valid edges are recomputed after every move.
+// ── Triangle (Random + Delaunay) board ────────────────────────────────────────
 
-/** Dots in the longest row, and number of rows (rows alternate n, n-1, n, …) */
-function triGrid(size: GameSize): { perRow: number; rows: number } {
-  return { small: { perRow: 4, rows: 4 }, medium: { perRow: 5, rows: 5 }, big: { perRow: 6, rows: 6 } }[size];
+function triDotCount(size: GameSize): number {
+  return { small: 10, medium: 18, big: 28 }[size];
+}
+function triMinDist(size: GameSize): number {
+  return { small: 0.24, medium: 0.18, big: 0.14 }[size];
 }
 
-/** How far a dot may wander from its grid spot, as a fraction of spacing */
-const DOT_JITTER = 0.15;
+/** Simple Bowyer-Watson Delaunay triangulation */
+interface BWPt { id: string; x: number; y: number; }
+interface BWTri { a: BWPt; b: BWPt; c: BWPt; }
 
-/** Longest line allowed, as a multiple of the typical gap between neighbours */
-const MAX_LINE_FACTOR = 1.6;
+function circumcircle(t: BWTri): { cx: number; cy: number; r2: number } {
+  const ax = t.b.x - t.a.x, ay = t.b.y - t.a.y;
+  const bx = t.c.x - t.a.x, by = t.c.y - t.a.y;
+  const D  = 2 * (ax * by - ay * bx);
+  if (Math.abs(D) < 1e-12) return { cx: Infinity, cy: Infinity, r2: Infinity };
+  const ux = (by * (ax * ax + ay * ay) - ay * (bx * bx + by * by)) / D;
+  const uy = (ax * (bx * bx + by * by) - bx * (ax * ax + ay * ay)) / D;
+  return { cx: t.a.x + ux, cy: t.a.y + uy, r2: ux * ux + uy * uy };
+}
 
-/** Smallest corner (degrees) a triangle may have when closed by a long line */
-const MIN_CLOSING_ANGLE = 20;
+function sharedEdge(t: BWTri, ea: BWPt, eb: BWPt): boolean {
+  const edges: [BWPt, BWPt][] = [[t.a,t.b],[t.b,t.c],[t.c,t.a]];
+  return edges.some(([p,q]) => (p===ea&&q===eb)||(p===eb&&q===ea));
+}
 
-/** How close (normalised units) a line may pass to a third dot */
-const DOT_CLEARANCE = 0.006;
+function bowyerWatson(pts: BWPt[]): BWTri[] {
+  const S = 50;
+  const sa: BWPt = { id:'__sa', x:-S, y:-S };
+  const sb: BWPt = { id:'__sb', x: S, y:-S };
+  const sc: BWPt = { id:'__sc', x: 0, y: S };
+  let tris: BWTri[] = [{ a:sa, b:sb, c:sc }];
+  const superIds = new Set(['__sa','__sb','__sc']);
 
-type Pt = { x: number; y: number };
+  for (const p of pts) {
+    const bad = tris.filter(t => {
+      const { cx, cy, r2 } = circumcircle(t);
+      return (p.x-cx)**2 + (p.y-cy)**2 < r2 - 1e-10;
+    });
+    const boundary: [BWPt,BWPt][] = [];
+    for (const t of bad) {
+      for (const [ea,eb] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]] as [BWPt,BWPt][]) {
+        if (!bad.some(o => o!==t && sharedEdge(o,ea,eb))) boundary.push([ea,eb]);
+      }
+    }
+    tris = tris.filter(t => !bad.includes(t));
+    for (const [ea,eb] of boundary) tris.push({ a:ea, b:eb, c:p });
+  }
 
-export function cross(o: Pt, a: Pt, b: Pt): number {
+  return tris.filter(t => ![t.a,t.b,t.c].some(v => superIds.has(v.id)));
+}
+
+function cross(o: BWPt, a: BWPt, b: BWPt): number {
   return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
-function distToSegment(p: Pt, a: Pt, b: Pt): number {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const t  = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
-  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+/**
+ * Bowyer-Watson with a finite super-triangle can drop triangles along the
+ * convex hull, leaving notches where two edges meet but the closing third
+ * edge is missing. Fill those notches with ear triangles until the outer
+ * boundary is convex.
+ */
+function fillHullGaps(pts: BWPt[], tris: BWTri[]): BWTri[] {
+  // Orient every triangle counter-clockwise (positive cross)
+  const out = tris.map(t => cross(t.a, t.b, t.c) < 0 ? { a: t.a, b: t.c, c: t.b } : t);
+
+  for (let guard = 0; guard < pts.length * 4; guard++) {
+    // Directed boundary edges: present in one triangle, reverse absent
+    const directed = new Set<string>();
+    for (const t of out)
+      for (const [p, q] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]]) directed.add(`${p.id}>${q.id}`);
+    const next = new Map<string, BWPt>();
+    const byId = new Map(pts.map(p => [p.id, p]));
+    for (const t of out)
+      for (const [p, q] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]])
+        if (!directed.has(`${q.id}>${p.id}`)) next.set(p.id, q);
+
+    let added = false;
+    for (const [aId, b] of next) {
+      const a = byId.get(aId)!;
+      const c = next.get(b.id);
+      if (!c || c === a) continue;
+      // Reflex boundary vertex (right turn on a CCW boundary) → notch
+      if (cross(a, b, c) >= -1e-12) continue;
+      const empty = pts.every(p => p === a || p === b || p === c ||
+        !(cross(a, c, p) > 0 && cross(c, b, p) > 0 && cross(b, a, p) > 0));
+      if (!empty) continue;
+      out.push({ a, b: c, c: b });
+      added = true;
+      break;
+    }
+    if (!added) break;
+  }
+  return out;
 }
 
-/** Proper crossing of segments ab and cd (touching at a shared dot doesn't count) */
-export function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
-  const d1 = cross(c, d, a), d2 = cross(c, d, b);
-  const d3 = cross(a, b, c), d4 = cross(a, b, d);
-  return d1 * d2 < 0 && d3 * d4 < 0;
+/** Smallest corner a triangle may have, in degrees; flatter ones are avoided */
+const MIN_TRIANGLE_ANGLE = 20;
+
+/** Corner angles of triangle abc in degrees, as [at a, at b, at c] */
+function cornerAngles(a: BWPt, b: BWPt, c: BWPt): [number, number, number] {
+  const corner = (p: BWPt, q: BWPt, r: BWPt) => {
+    const ux = q.x - p.x, uy = q.y - p.y, vx = r.x - p.x, vy = r.y - p.y;
+    const cos = (ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy));
+    return Math.acos(Math.max(-1, Math.min(1, cos))) * 180 / Math.PI;
+  };
+  return [corner(a, b, c), corner(b, a, c), corner(c, a, b)];
 }
 
 function generateTriangleBoard(size: GameSize) {
-  const { perRow, rows } = triGrid(size);
-  const pad = 0.1;
-  // Neighbouring dots form roughly equilateral triangles
-  const dx   = (1 - 2 * pad) / (perRow - 1);
-  const dy   = dx * Math.sqrt(3) / 2;
-  const top  = (1 - (rows - 1) * dy) / 2;
+  const n       = triDotCount(size);
+  const minDist = triMinDist(size);
+  const pad     = 0.12;
 
-  const dots: Dot[] = [];
-  for (let r = 0; r < rows; r++) {
-    // Odd rows have one dot fewer and are shifted half a gap, so rows interlock
-    const count = r % 2 ? perRow - 1 : perRow;
-    for (let c = 0; c < count; c++) {
-      const gx = pad + (r % 2 ? dx / 2 : 0) + c * dx, gy = top + r * dy;
-      // Jitter each dot, retrying until it isn't nearly in line with two others
-      // (a line skimming past a third dot would leave an unclosable sliver)
-      let p = { x: gx, y: gy };
-      for (let tries = 0; tries < 200; tries++) {
-        const q = {
-          x: gx + (Math.random() * 2 - 1) * DOT_JITTER * dx,
-          y: gy + (Math.random() * 2 - 1) * DOT_JITTER * dy,
-        };
-        p = q;
-        if (!dots.some((a, i) => dots.some((b, j) => j > i && (
-          distToSegment(q, a, b) < DOT_CLEARANCE ||
-          distToSegment(a, q, b) < DOT_CLEARANCE ||
-          distToSegment(b, q, a) < DOT_CLEARANCE)))) break;
-      }
-      dots.push({ id: `d${dots.length}`, ...p });
+  let pts: BWPt[] = [];
+  let nextId = 0;
+  const addRandomDots = () => {
+    let attempts = 0;
+    while (pts.length < n && attempts < 20000) {
+      attempts++;
+      const x = pad + Math.random() * (1 - 2 * pad);
+      const y = pad + Math.random() * (1 - 2 * pad);
+      if (pts.every(d => Math.hypot(d.x-x, d.y-y) >= minDist))
+        pts.push({ id:`d${nextId++}`, x, y });
     }
-  }
-
-  return { dots, validEdges: computeTriangleEdges(dots, []), shapes: [] as GameShape[] };
-}
-
-/** Longest legal line for these dots, from the median nearest-neighbour gap */
-function maxLineLength(dots: Dot[]): number {
-  const nearest = dots
-    .map(a => Math.min(...dots.filter(b => b !== a).map(b => Math.hypot(a.x - b.x, a.y - b.y))))
-    .sort((x, y) => x - y);
-  return nearest[Math.floor(nearest.length / 2)] * MAX_LINE_FACTOR;
-}
-
-/** Drawn lines plus every undrawn pair that is still a legal move */
-export function computeTriangleEdges(dots: Dot[], drawnLines: DrawnLine[]): Edge[] {
-  const byId  = new Map(dots.map(d => [d.id, d]));
-  const drawn = new Set(drawnLines.map(l => l.id));
-  const edges: Edge[] = drawnLines.map(l => ({ id: l.id, dot1Id: l.dot1Id, dot2Id: l.dot2Id }));
-  const maxLen = maxLineLength(dots);
-
-  for (let i = 0; i < dots.length; i++) {
-    for (let j = i + 1; j < dots.length; j++) {
-      const a = dots[i], b = dots[j];
-      const id = lineKey(a.id, b.id);
-      if (drawn.has(id)) continue;
-      if (lineIsLegal(dots, byId, drawn, drawnLines, maxLen, a, b))
-        edges.push({ id, dot1Id: a.id, dot2Id: b.id });
-    }
-  }
-  return edges;
-}
-
-/** Whether the undrawn line a–b is a legal move (same rules as computeTriangleEdges) */
-export function isLegalTriangleLine(dots: Dot[], drawnLines: DrawnLine[], a: Dot, b: Dot): boolean {
-  const byId = new Map(dots.map(d => [d.id, d]));
-  const drawn = new Set(drawnLines.map(l => l.id));
-  return lineIsLegal(dots, byId, drawn, drawnLines, maxLineLength(dots), a, b);
-}
-
-function lineIsLegal(
-  dots: Dot[], byId: Map<string, Dot>, drawn: Set<string>, drawnLines: DrawnLine[],
-  maxLen: number, a: Dot, b: Dot,
-): boolean {
-  // A long line is only allowed when it closes a triangle that's already
-  // been started, and can never end up as the side of a thin sliver
-  if (Math.hypot(a.x - b.x, a.y - b.y) > maxLen) {
-    const others = dots.filter(c => c !== a && c !== b && triangleIsEmpty(dots, a, b, c));
-    const closes = others.some(c => drawn.has(lineKey(a.id, c.id)) && drawn.has(lineKey(b.id, c.id)));
-    if (!closes || others.some(c => minAngle(a, b, c) < MIN_CLOSING_ANGLE)) return false;
-  }
-  if (dots.some(p => p !== a && p !== b && distToSegment(p, a, b) < DOT_CLEARANCE)) return false;
-  if (drawnLines.some(l => segmentsCross(a, b, byId.get(l.dot1Id)!, byId.get(l.dot2Id)!))) return false;
-  return true;
-}
-
-/** Smallest corner angle of a triangle, in degrees */
-function minAngle(a: Pt, b: Pt, c: Pt): number {
-  const corner = (p: Pt, q: Pt, r: Pt) => {
-    const ux = q.x - p.x, uy = q.y - p.y, vx = r.x - p.x, vy = r.y - p.y;
-    return Math.acos(Math.max(-1, Math.min(1, (ux * vx + uy * vy) / (Math.hypot(ux, uy) * Math.hypot(vx, vy)))));
   };
-  return Math.min(corner(a, b, c), corner(b, a, c), corner(c, a, b)) * 180 / Math.PI;
-}
 
-function triangleIsEmpty(dots: Dot[], a: Dot, b: Dot, c: Dot): boolean {
-  const s = Math.sign(cross(a, b, c));
-  return dots.every(p => p === a || p === b || p === c ||
-    !(Math.sign(cross(a, b, p)) === s && Math.sign(cross(b, c, p)) === s && Math.sign(cross(c, a, p)) === s));
-}
-
-/** Triangles closed by the new line: both other sides drawn, no dot inside */
-export function detectNewTriangles(dots: Dot[], drawnLines: DrawnLine[], newLine: Edge): GameShape[] {
-  const byId  = new Map(dots.map(d => [d.id, d]));
-  const drawn = new Set(drawnLines.map(l => l.id));
-  const a = byId.get(newLine.dot1Id)!, b = byId.get(newLine.dot2Id)!;
-  const found: GameShape[] = [];
-
-  for (const c of dots) {
-    if (c === a || c === b) continue;
-    if (!drawn.has(lineKey(a.id, c.id)) || !drawn.has(lineKey(b.id, c.id))) continue;
-    if (!triangleIsEmpty(dots, a, b, c)) continue;
-    const ids = [a.id, b.id, c.id].sort();
-    found.push({
-      id: `tri_${ids.join('_')}`,
-      dotIds: [a.id, b.id, c.id],
-      edgeIds: [lineKey(a.id, b.id), lineKey(b.id, c.id), lineKey(a.id, c.id)],
-    });
+  // Triangulate, then move the dot at the wide corner of any too-flat
+  // triangle to a new random spot, until every triangle is well-shaped
+  let triangles: BWTri[] = [];
+  for (let round = 0; round < 500; round++) {
+    if (round % 100 === 0) { pts = []; nextId = 0; } // start afresh if stuck
+    addRandomDots();
+    triangles = fillHullGaps(pts, bowyerWatson(pts));
+    const flat = triangles.filter(t => Math.min(...cornerAngles(t.a, t.b, t.c)) < MIN_TRIANGLE_ANGLE);
+    if (flat.length === 0) break;
+    const drop = new Set(flat.map(t => {
+      const ang = cornerAngles(t.a, t.b, t.c);
+      return [t.a, t.b, t.c][ang.indexOf(Math.max(...ang))];
+    }));
+    pts = pts.filter(p => !drop.has(p));
   }
-  return found;
+
+  // Renumber so dot ids stay d0…d(n-1)
+  const ids = new Map(pts.map((p, i) => [p.id, `d${i}`]));
+  const dots: Dot[] = pts.map(p => ({ id: ids.get(p.id)!, x: p.x, y: p.y }));
+
+  const edgeSet = new Set<string>();
+  const validEdges: Edge[] = [];
+  const shapes: GameShape[] = [];
+
+  for (let i = 0; i < triangles.length; i++) {
+    const [a, b, c] = [triangles[i].a, triangles[i].b, triangles[i].c].map(p => ids.get(p.id)!);
+    const e = [lineKey(a,b), lineKey(b,c), lineKey(a,c)];
+    for (const [idx,pair] of [[0,[a,b]],[1,[b,c]],[2,[a,c]]] as [number,[string,string]][]) {
+      if (!edgeSet.has(e[idx])) {
+        edgeSet.add(e[idx]);
+        validEdges.push({ id:e[idx], dot1Id:pair[0], dot2Id:pair[1] });
+      }
+    }
+    shapes.push({ id:`tri${i}`, dotIds:[a,b,c], edgeIds:e });
+  }
+
+  return { dots, validEdges, shapes };
 }
 
 // ── Shape Completion Detection ────────────────────────────────────────────────

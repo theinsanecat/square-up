@@ -1,5 +1,4 @@
 import { Dot, Edge, GameShape, DrawnLine, ShapeMode, BotDifficulty } from './types';
-import { lineKey, cross, segmentsCross, isLegalTriangleLine } from './gameLogic';
 
 // ── Computer opponent ─────────────────────────────────────────────────────────
 //
@@ -9,9 +8,7 @@ import { lineKey, cross, segmentsCross, isLegalTriangleLine } from './gameLogic'
 //   3. Otherwise sacrifice the edge that hands the opponent the fewest shapes.
 // Easy skips steps 2–3 and sometimes misses a closable shape.
 //
-// In square mode the shapes and edges are fixed. In triangle mode any empty
-// triangle can be made, and which lines are legal changes after every move, so
-// lookahead tracks legal lines move by move with the server's own rules.
+// Shapes and edges are fixed when the board is generated, in both modes.
 
 export interface BotBoard {
   shapeMode: ShapeMode;
@@ -26,19 +23,14 @@ interface Candidate { id: string; edgeIds: string[]; }
 interface Sim {
   drawn: Set<string>;
   open: Set<string>;
-  lines: DrawnLine[];
 }
 
 class Model {
   readonly candidates: Candidate[];
   readonly byEdge = new Map<string, Candidate[]>();
-  private readonly dotById: Map<string, Dot>;
 
   constructor(private readonly board: BotBoard, readonly start: Sim) {
-    this.dotById = new Map(board.dots.map(d => [d.id, d]));
-    this.candidates = board.shapeMode === 'triangle'
-      ? this.emptyTriangles()
-      : board.shapes.filter(s => !s.winnerId);
+    this.candidates = board.shapes.filter(s => !s.winnerId);
     for (const c of this.candidates)
       for (const e of c.edgeIds) {
         if (!this.byEdge.has(e)) this.byEdge.set(e, []);
@@ -46,53 +38,13 @@ class Model {
       }
   }
 
-  /** Every unclosed triangle with no dot inside. Long sides may only become
-   *  legal later, so sides aren't filtered here; closable() checks legality. */
-  private emptyTriangles(): Candidate[] {
-    const { dots } = this.board;
-    const { drawn } = this.start;
-    const out: Candidate[] = [];
-    for (let i = 0; i < dots.length; i++)
-      for (let j = i + 1; j < dots.length; j++) {
-        const a = dots[i], b = dots[j];
-        for (let k = j + 1; k < dots.length; k++) {
-          const c = dots[k];
-          const edgeIds = [lineKey(a.id, b.id), lineKey(b.id, c.id), lineKey(a.id, c.id)];
-          if (edgeIds.every(e => drawn.has(e))) continue; // already closed
-          const s = Math.sign(cross(a, b, c));
-          const empty = dots.every(p => p === a || p === b || p === c ||
-            !(Math.sign(cross(a, b, p)) === s && Math.sign(cross(b, c, p)) === s && Math.sign(cross(c, a, p)) === s));
-          if (empty) out.push({ id: edgeIds.join('/'), edgeIds });
-        }
-      }
-    return out;
-  }
-
   play(sim: Sim, edgeId: string) {
     sim.drawn.add(edgeId);
     sim.open.delete(edgeId);
-    if (this.board.shapeMode !== 'triangle') return;
-
-    const [d1, d2] = edgeId.split('|');
-    const p = this.dotById.get(d1)!, q = this.dotById.get(d2)!;
-    sim.lines = [...sim.lines, { id: edgeId, dot1Id: d1, dot2Id: d2, playerId: '', playerColor: 'blue' }];
-    // Lines crossing the new one are no longer legal
-    for (const id of [...sim.open]) {
-      const [e1, e2] = id.split('|');
-      if (segmentsCross(p, q, this.dotById.get(e1)!, this.dotById.get(e2)!)) sim.open.delete(id);
-    }
-    // A long line can only become legal by closing a triangle this line just started
-    for (const c of this.byEdge.get(edgeId) ?? []) {
-      if (this.missing(c, sim) !== 1) continue;
-      const last = c.edgeIds.find(e => !sim.drawn.has(e))!;
-      if (sim.open.has(last)) continue;
-      const [l1, l2] = last.split('|');
-      if (isLegalTriangleLine(this.board.dots, sim.lines, this.dotById.get(l1)!, this.dotById.get(l2)!)) sim.open.add(last);
-    }
   }
 
   fork(sim: Sim): Sim {
-    return { drawn: new Set(sim.drawn), open: new Set(sim.open), lines: sim.lines };
+    return { drawn: new Set(sim.drawn), open: new Set(sim.open) };
   }
 
   /** Undrawn sides of c */
@@ -146,7 +98,7 @@ export function chooseBotMove(board: BotBoard, difficulty: BotDifficulty): Edge 
   const open  = board.validEdges.filter(e => !drawn.has(e.id));
   if (open.length === 0) return null;
 
-  const model = new Model(board, { drawn, open: new Set(open.map(e => e.id)), lines: board.drawnLines });
+  const model = new Model(board, { drawn, open: new Set(open.map(e => e.id)) });
   const start = model.start;
 
   const closing = open.filter(e => model.closes(e.id, start));
