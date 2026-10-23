@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { BotDifficulty } from '../types/game';
 
 const DIFFICULTIES: BotDifficulty[] = ['easy', 'medium', 'hard'];
@@ -114,6 +114,11 @@ export default function LandingPage({ onCreateRoom, onCreateSoloRoom, onJoinRoom
   const [name, setName]       = useState('');
   const [code, setCode]       = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Re-enable the buttons if the server reports a problem
+  useEffect(() => {
+    if (error) setLoading(false);
+  }, [error]);
 
   const handleCreate = () => {
     if (!name.trim()) return;

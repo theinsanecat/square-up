@@ -6,6 +6,9 @@ import type {
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
 
+// How long to wait for the server to answer a solo game request
+const SOLO_START_TIMEOUT_MS = 8000;
+
 export interface SocketState {
   socket: Socket | null;
   connected: boolean;
@@ -18,6 +21,7 @@ export interface SocketState {
 
 export function useSocket() {
   const socketRef = useRef<Socket | null>(null);
+  const soloTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [state, setState] = useState<SocketState>({
     socket: null,
     connected: false,
@@ -40,8 +44,10 @@ export function useSocket() {
     socket.on('error', ({ message }: { message: string }) =>
       setState(s => ({ ...s, error: message })));
 
-    socket.on('room-created', ({ playerId, gameState }: { playerId: string; gameState: GameState }) =>
-      setState(s => ({ ...s, myPlayerId: playerId, gameState, error: null })));
+    socket.on('room-created', ({ playerId, gameState }: { playerId: string; gameState: GameState }) => {
+      if (soloTimerRef.current) { clearTimeout(soloTimerRef.current); soloTimerRef.current = null; }
+      setState(s => ({ ...s, myPlayerId: playerId, gameState, error: null }));
+    });
     socket.on('room-joined', ({ playerId, gameState }: { playerId: string; gameState: GameState }) =>
       setState(s => ({ ...s, myPlayerId: playerId, gameState, error: null })));
 
@@ -57,7 +63,10 @@ export function useSocket() {
     socket.on('opponent-left', () => setState(s => ({ ...s, opponentLeft: true })));
     socket.on('game-ended-by-host', () => setState(s => ({ ...s, gameEndedByHost: true })));
 
-    return () => { socket.disconnect(); };
+    return () => {
+      if (soloTimerRef.current) clearTimeout(soloTimerRef.current);
+      socket.disconnect();
+    };
   }, [setGs]);
 
   // ── Actions ───────────────────────────────────────────────────────────────────
@@ -70,6 +79,15 @@ export function useSocket() {
   const createSoloRoom = useCallback((playerName: string, difficulty: BotDifficulty) => {
     socketRef.current?.emit('create-solo-room', { playerName, difficulty });
     setState(s => ({ ...s, error: null }));
+    // An older server ignores this event, so don't leave the player waiting forever
+    if (soloTimerRef.current) clearTimeout(soloTimerRef.current);
+    soloTimerRef.current = setTimeout(() => {
+      soloTimerRef.current = null;
+      setState(s => ({
+        ...s,
+        error: "The game server didn't respond. It may need updating to support single-player. Please try again later.",
+      }));
+    }, SOLO_START_TIMEOUT_MS);
   }, []);
 
   const joinRoom = useCallback((roomCode: string, playerName: string) => {
