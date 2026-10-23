@@ -5,6 +5,7 @@ export type StampType   = 'heart'  | 'star' | 'flower' | 'diamond';
 export type ShapeMode   = 'square' | 'triangle';
 export type GameSize    = 'small'  | 'medium' | 'big';
 export type GameStatus  = 'waiting' | 'setup' | 'playing' | 'finished';
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
 
 export interface Dot      { id: string; x: number; y: number; }
 export interface Edge     { id: string; dot1Id: string; dot2Id: string; }
@@ -28,9 +29,10 @@ export interface Player {
   score: number;
   isHost: boolean;
   isReady: boolean;
+  isBot?: boolean;
 }
 
-export interface GameConfig  { shapeMode: ShapeMode; size: GameSize; }
+export interface GameConfig  { shapeMode: ShapeMode; size: GameSize; botDifficulty?: BotDifficulty; }
 
 export interface GameState {
   roomCode: string;

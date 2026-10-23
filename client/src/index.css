@@ -125,6 +125,7 @@ body {
 
 /* Buttons */
 .btn-group { display: flex; gap: 10px; margin-bottom: 24px; flex-wrap: wrap; }
+.solo-btn { margin: -14px 0 24px; }
 
 .btn {
   display: inline-flex; align-items: center; gap: 7px;

@@ -22,13 +22,14 @@ Players take turns connecting adjacent dot nodes. Completing a shape claims it w
 - **Board Sizes:** Small, Medium, and Big options affecting the total dot count and board density.
 - **Bonus Turns:** Closing a shape rewards the player with an immediate extra turn. Closing multiple shapes sequentially keeps the turn active until a line is drawn that does not complete a shape.
 - **Real-Time Multiplayer:** Built with WebSockets for instant turn synchronization and move previews.
+- **Single-Player Mode:** Play solo against a computer opponent with Easy, Medium, or Hard difficulty.
 - **Host Controls:** The room creator can re-configure game settings or end the game session for both players.
 
 ---
 
 ## How to Play
 
-1. Open the live app link and click **Create Room**.
+1. Open the live app link and click **Create Room** (or **Play vs Computer** to play solo).
 2. Share the 6-letter room code with a friend to join via **Join Room**.
 3. Select your marker color and stamp avatar, then click **Mark as Ready**.
 4. On your turn, click a dot node to select it, then click an adjacent dot node to draw a line.

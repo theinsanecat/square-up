@@ -1,7 +1,19 @@
 import { useState } from 'react';
+import type { BotDifficulty } from '../types/game';
+
+const DIFFICULTIES: BotDifficulty[] = ['easy', 'medium', 'hard'];
+const DIFFICULTY_LABELS: Record<BotDifficulty, string> = {
+  easy: 'Easy', medium: 'Medium', hard: 'Hard',
+};
+const DIFFICULTY_DESC: Record<BotDifficulty, string> = {
+  easy:   'Makes mistakes',
+  medium: 'Plays it safe',
+  hard:   'Thinks ahead',
+};
 
 interface Props {
   onCreateRoom: (name: string) => void;
+  onCreateSoloRoom: (name: string, difficulty: BotDifficulty) => void;
   onJoinRoom: (code: string, name: string) => void;
   error: string | null;
   connected: boolean;
@@ -96,8 +108,9 @@ function FloatingBg() {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected }: Props) {
-  const [view, setView]       = useState<'home' | 'create' | 'join'>('home');
+export default function LandingPage({ onCreateRoom, onCreateSoloRoom, onJoinRoom, error, connected }: Props) {
+  const [view, setView]       = useState<'home' | 'create' | 'join' | 'solo'>('home');
+  const [difficulty, setDifficulty] = useState<BotDifficulty>('medium');
   const [name, setName]       = useState('');
   const [code, setCode]       = useState('');
   const [loading, setLoading] = useState(false);
@@ -106,6 +119,12 @@ export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected
     if (!name.trim()) return;
     setLoading(true);
     onCreateRoom(name.trim());
+  };
+
+  const handleSolo = () => {
+    if (!name.trim()) return;
+    setLoading(true);
+    onCreateSoloRoom(name.trim(), difficulty);
   };
 
   const handleJoin = () => {
@@ -135,7 +154,7 @@ export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected
             </svg>
           </div>
           <h1 className="logo-title">Square<span>Up</span></h1>
-          <p className="logo-sub">Real-time dot connection battle for two players</p>
+          <p className="logo-sub">Real-time dot connection battle — with a friend or the computer</p>
         </div>
 
         {/* Connection badge */}
@@ -149,7 +168,7 @@ export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected
           {view === 'home' && (
             <>
               <h2>Ready to play?</h2>
-              <p className="card-sub">Create a room and share the code, or join a friend's game.</p>
+              <p className="card-sub">Create a room and share the code, join a friend's game, or play solo against the computer.</p>
               <div className="btn-group">
                 <button className="btn btn-primary" onClick={() => setView('create')}>
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><rect x="1" y="1" width="14" height="14" rx="2"/><line x1="8" y1="4" x2="8" y2="12"/><line x1="4" y1="8" x2="12" y2="8"/></svg>
@@ -160,6 +179,10 @@ export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected
                   Join Room
                 </button>
               </div>
+              <button className="btn btn-outline full solo-btn" onClick={() => setView('solo')}>
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="4" width="12" height="9" rx="2"/><line x1="8" y1="1.5" x2="8" y2="4"/><circle cx="5.5" cy="8.5" r="1" fill="currentColor"/><circle cx="10.5" cy="8.5" r="1" fill="currentColor"/></svg>
+                Play vs Computer
+              </button>
 
               <div className="how-to">
                 <h3>How to play</h3>
@@ -203,6 +226,43 @@ export default function LandingPage({ onCreateRoom, onJoinRoom, error, connected
               <button className="btn btn-primary full" onClick={handleCreate}
                 disabled={!name.trim() || loading || !connected}>
                 {loading ? 'Creating…' : 'Create Room'}
+              </button>
+            </>
+          )}
+
+          {view === 'solo' && (
+            <>
+              <button className="back-btn" onClick={() => { setView('home'); setLoading(false); }}>
+                <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 2L4 7l5 5"/></svg>
+                Back
+              </button>
+              <h2>Play vs Computer</h2>
+              <p className="card-sub">Practice on your own against a computer opponent.</p>
+              <div className="form-group">
+                <label htmlFor="solo-name">Your Name</label>
+                <input id="solo-name" className="input" placeholder="e.g. Alex" value={name}
+                  maxLength={20} onChange={e => setName(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSolo()} autoFocus />
+              </div>
+              <div className="form-group">
+                <label>Difficulty</label>
+                <div className="size-btns">
+                  {DIFFICULTIES.map(d => (
+                    <button
+                      key={d}
+                      className={`size-btn ${difficulty===d?'active':''}`}
+                      onClick={() => setDifficulty(d)}
+                    >
+                      <strong>{DIFFICULTY_LABELS[d]}</strong>
+                      <span>{DIFFICULTY_DESC[d]}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {error && <p className="error-msg">{error}</p>}
+              <button className="btn btn-primary full" onClick={handleSolo}
+                disabled={!name.trim() || loading || !connected}>
+                {loading ? 'Starting…' : 'Start Solo Game'}
               </button>
             </>
           )}

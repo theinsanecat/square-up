@@ -5,6 +5,7 @@ export type StampType   = 'heart'  | 'star' | 'flower' | 'diamond';
 export type ShapeMode   = 'square' | 'triangle';
 export type GameSize    = 'small'  | 'medium' | 'big';
 export type GameStatus  = 'waiting' | 'setup' | 'playing' | 'finished';
+export type BotDifficulty = 'easy' | 'medium' | 'hard';
 
 // A dot node on the board (coordinates normalised 0-1)
 export interface Dot {
@@ -45,11 +46,13 @@ export interface Player {
   score: number;
   isHost: boolean;
   isReady: boolean;
+  isBot?: boolean;
 }
 
 export interface GameConfig {
   shapeMode: ShapeMode;
   size: GameSize;
+  botDifficulty?: BotDifficulty;   // solo games only
 }
 
 export interface GameState {
@@ -68,6 +71,7 @@ export interface GameState {
 // ── Socket Event Payloads ─────────────────────────────────────────────────────
 
 export interface CreateRoomPayload  { playerName: string; }
+export interface CreateSoloRoomPayload { playerName: string; difficulty?: BotDifficulty; }
 export interface JoinRoomPayload    { roomCode: string; playerName: string; }
 export interface PlayerSetupPayload { color: PlayerColor; stamp: StampType; isReady: boolean; }
 export interface HostConfigPayload  { config: GameConfig; }
