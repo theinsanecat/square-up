@@ -1,5 +1,5 @@
 import { Dot, Edge, GameShape, DrawnLine, ShapeMode, BotDifficulty } from './types';
-import { lineKey, cross, segmentsCross } from './gameLogic';
+import { lineKey, cross, segmentsCross, isLegalTriangleLine } from './gameLogic';
 
 // ── Computer opponent ─────────────────────────────────────────────────────────
 //
@@ -10,8 +10,8 @@ import { lineKey, cross, segmentsCross } from './gameLogic';
 // Easy skips steps 2–3 and sometimes misses a closable shape.
 //
 // In square mode the shapes and edges are fixed. In triangle mode any empty
-// triangle can still be made, and drawing a line removes every open line that
-// crosses it, so both are worked out from the dots here.
+// triangle can be made, and which lines are legal changes after every move, so
+// lookahead tracks legal lines move by move with the server's own rules.
 
 export interface BotBoard {
   shapeMode: ShapeMode;
@@ -26,18 +26,16 @@ interface Candidate { id: string; edgeIds: string[]; }
 interface Sim {
   drawn: Set<string>;
   open: Set<string>;
+  lines: DrawnLine[];
 }
 
 class Model {
   readonly candidates: Candidate[];
   readonly byEdge = new Map<string, Candidate[]>();
-  private readonly edgeById: Map<string, Edge>;
   private readonly dotById: Map<string, Dot>;
-  private readonly crossMemo = new Map<string, string[]>();
 
   constructor(private readonly board: BotBoard, readonly start: Sim) {
-    this.edgeById = new Map(board.validEdges.map(e => [e.id, e]));
-    this.dotById  = new Map(board.dots.map(d => [d.id, d]));
+    this.dotById = new Map(board.dots.map(d => [d.id, d]));
     this.candidates = board.shapeMode === 'triangle'
       ? this.emptyTriangles()
       : board.shapes.filter(s => !s.winnerId);
@@ -48,19 +46,17 @@ class Model {
       }
   }
 
-  /** Every triangle with no dot inside whose sides are drawn or still drawable */
+  /** Every unclosed triangle with no dot inside. Long sides may only become
+   *  legal later, so sides aren't filtered here; closable() checks legality. */
   private emptyTriangles(): Candidate[] {
     const { dots } = this.board;
-    const { drawn, open } = this.start;
-    const usable = (a: Dot, b: Dot) => { const k = lineKey(a.id, b.id); return drawn.has(k) || open.has(k); };
+    const { drawn } = this.start;
     const out: Candidate[] = [];
     for (let i = 0; i < dots.length; i++)
       for (let j = i + 1; j < dots.length; j++) {
         const a = dots[i], b = dots[j];
-        if (!usable(a, b)) continue;
         for (let k = j + 1; k < dots.length; k++) {
           const c = dots[k];
-          if (!usable(b, c) || !usable(a, c)) continue;
           const edgeIds = [lineKey(a.id, b.id), lineKey(b.id, c.id), lineKey(a.id, c.id)];
           if (edgeIds.every(e => drawn.has(e))) continue; // already closed
           const s = Math.sign(cross(a, b, c));
@@ -72,58 +68,69 @@ class Model {
     return out;
   }
 
-  /** Open edges that become illegal once edgeId is drawn */
-  private crossers(edgeId: string): string[] {
-    if (this.board.shapeMode !== 'triangle') return [];
-    let hit = this.crossMemo.get(edgeId);
-    if (hit) return hit;
-    const e = this.edgeById.get(edgeId)!;
-    const a = this.dotById.get(e.dot1Id)!, b = this.dotById.get(e.dot2Id)!;
-    hit = [];
-    for (const id of this.start.open) {
-      const o = this.edgeById.get(id)!;
-      if (segmentsCross(a, b, this.dotById.get(o.dot1Id)!, this.dotById.get(o.dot2Id)!)) hit.push(id);
-    }
-    this.crossMemo.set(edgeId, hit);
-    return hit;
-  }
-
   play(sim: Sim, edgeId: string) {
     sim.drawn.add(edgeId);
     sim.open.delete(edgeId);
-    for (const x of this.crossers(edgeId)) sim.open.delete(x);
+    if (this.board.shapeMode !== 'triangle') return;
+
+    const [d1, d2] = edgeId.split('|');
+    const p = this.dotById.get(d1)!, q = this.dotById.get(d2)!;
+    sim.lines = [...sim.lines, { id: edgeId, dot1Id: d1, dot2Id: d2, playerId: '', playerColor: 'blue' }];
+    // Lines crossing the new one are no longer legal
+    for (const id of [...sim.open]) {
+      const [e1, e2] = id.split('|');
+      if (segmentsCross(p, q, this.dotById.get(e1)!, this.dotById.get(e2)!)) sim.open.delete(id);
+    }
+    // A long line can only become legal by closing a triangle this line just started
+    for (const c of this.byEdge.get(edgeId) ?? []) {
+      if (this.missing(c, sim) !== 1) continue;
+      const last = c.edgeIds.find(e => !sim.drawn.has(e))!;
+      if (sim.open.has(last)) continue;
+      const [l1, l2] = last.split('|');
+      if (isLegalTriangleLine(this.board.dots, sim.lines, this.dotById.get(l1)!, this.dotById.get(l2)!)) sim.open.add(last);
+    }
   }
 
-  /** Undrawn sides of c, or -1 if c can no longer be made */
+  fork(sim: Sim): Sim {
+    return { drawn: new Set(sim.drawn), open: new Set(sim.open), lines: sim.lines };
+  }
+
+  /** Undrawn sides of c */
   missing(c: Candidate, sim: Sim): number {
     let n = 0;
-    for (const e of c.edgeIds) {
-      if (sim.drawn.has(e)) continue;
-      if (!sim.open.has(e)) return -1;
-      n++;
-    }
+    for (const e of c.edgeIds) if (!sim.drawn.has(e)) n++;
     return n;
   }
 
-  closes(edgeId: string, sim: Sim): boolean {
-    return (this.byEdge.get(edgeId) ?? []).some(c => this.missing(c, sim) === 1);
+  /** c has one side left and that side is a legal move right now */
+  closable(c: Candidate, sim: Sim): boolean {
+    if (this.missing(c, sim) !== 1) return false;
+    return sim.open.has(c.edgeIds.find(e => !sim.drawn.has(e))!);
   }
 
-  /** Drawing this edge leaves a shape one edge from closing */
+  closes(edgeId: string, sim: Sim): boolean {
+    return (this.byEdge.get(edgeId) ?? []).some(c => this.closable(c, sim));
+  }
+
+  /** Drawing this edge leaves a shape the opponent can close */
   givesAway(edgeId: string, sim: Sim): boolean {
-    return (this.byEdge.get(edgeId) ?? []).some(c => this.missing(c, sim) === 2);
+    const touched = (this.byEdge.get(edgeId) ?? []).filter(c => this.missing(c, sim) === 2);
+    if (touched.length === 0) return false;
+    const next = this.fork(sim);
+    this.play(next, edgeId);
+    return touched.some(c => this.closable(c, next));
   }
 
   /** How many shapes the opponent could grab in a row after we draw edgeId */
   sacrificeSize(edgeId: string): number {
-    const sim: Sim = { drawn: new Set(this.start.drawn), open: new Set(this.start.open) };
+    const sim = this.fork(this.start);
     this.play(sim, edgeId);
     let taken = 0;
     for (;;) {
-      const ready = this.candidates.find(c => this.missing(c, sim) === 1);
+      const ready = this.candidates.find(c => this.closable(c, sim));
       if (!ready) return taken;
       const last = ready.edgeIds.find(e => !sim.drawn.has(e))!;
-      const before = (this.byEdge.get(last) ?? []).filter(c => this.missing(c, sim) === 1).length;
+      const before = (this.byEdge.get(last) ?? []).filter(c => this.closable(c, sim)).length;
       this.play(sim, last);
       taken += before;
     }
@@ -139,7 +146,7 @@ export function chooseBotMove(board: BotBoard, difficulty: BotDifficulty): Edge 
   const open  = board.validEdges.filter(e => !drawn.has(e.id));
   if (open.length === 0) return null;
 
-  const model = new Model(board, { drawn, open: new Set(open.map(e => e.id)) });
+  const model = new Model(board, { drawn, open: new Set(open.map(e => e.id)), lines: board.drawnLines });
   const start = model.start;
 
   const closing = open.filter(e => model.closes(e.id, start));
