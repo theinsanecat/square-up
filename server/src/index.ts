@@ -10,7 +10,8 @@ import {
   DrawnLine, BotDifficulty,
 } from './types';
 import {
-  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner
+  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner,
+  computeTriangleEdges, detectNewTriangles,
 } from './gameLogic';
 import { chooseBotMove } from './bot';
 
@@ -274,7 +275,14 @@ function applyMove(state: GameState, playerId: string, dot1Id: string, dot2Id: s
   state.drawnLines.push(newLine);
 
   // Detect completed shapes
-  const completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
+  let completed;
+  if (state.config.shapeMode === 'triangle') {
+    completed = detectNewTriangles(state.dots, state.drawnLines, newLine);
+    state.shapes.push(...completed);
+    state.validEdges = computeTriangleEdges(state.dots, state.drawnLines);
+  } else {
+    completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
+  }
   for (const s of completed) {
     s.winnerId   = playerId;
     s.winnerColor = currentPlayer.color;
@@ -320,7 +328,13 @@ function scheduleBotTurn(state: GameState) {
     if (state.status !== 'playing' || state.currentPlayerId !== bot.id) return;
     if (state.drawnLines.length !== lineCount) return;
     const difficulty: BotDifficulty = state.config.botDifficulty ?? 'medium';
-    const edge = chooseBotMove(state.validEdges, state.shapes, state.drawnLines, difficulty);
+    const edge = chooseBotMove({
+      shapeMode:  state.config.shapeMode,
+      dots:       state.dots,
+      validEdges: state.validEdges,
+      shapes:     state.shapes,
+      drawnLines: state.drawnLines,
+    }, difficulty);
     if (edge) applyMove(state, bot.id, edge.dot1Id, edge.dot2Id);
   }, BOT_MOVE_DELAY_MS);
 }

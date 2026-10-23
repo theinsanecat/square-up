@@ -66,7 +66,11 @@ function generateSquareBoard(size: GameSize) {
   return { dots, validEdges, shapes };
 }
 
-// ── Triangle (Random + Delaunay) board ────────────────────────────────────────
+// ── Triangle (Random dots, free-form) board ───────────────────────────────────
+//
+// Any two dots can be joined as long as the line doesn't pass through another
+// dot or cross a line already on the board. Any three joined dots with no dot
+// inside form a triangle. Valid edges are recomputed after every move.
 
 function triDotCount(size: GameSize): number {
   return { small: 10, medium: 18, big: 28 }[size];
@@ -75,49 +79,26 @@ function triMinDist(size: GameSize): number {
   return { small: 0.24, medium: 0.18, big: 0.14 }[size];
 }
 
-/** Simple Bowyer-Watson Delaunay triangulation */
-interface BWPt { id: string; x: number; y: number; }
-interface BWTri { a: BWPt; b: BWPt; c: BWPt; }
+/** How close (normalised units) a line may pass to a third dot */
+const DOT_CLEARANCE = 0.006;
 
-function circumcircle(t: BWTri): { cx: number; cy: number; r2: number } {
-  const ax = t.b.x - t.a.x, ay = t.b.y - t.a.y;
-  const bx = t.c.x - t.a.x, by = t.c.y - t.a.y;
-  const D  = 2 * (ax * by - ay * bx);
-  if (Math.abs(D) < 1e-12) return { cx: Infinity, cy: Infinity, r2: Infinity };
-  const ux = (by * (ax * ax + ay * ay) - ay * (bx * bx + by * by)) / D;
-  const uy = (ax * (bx * bx + by * by) - bx * (ax * ax + ay * ay)) / D;
-  return { cx: t.a.x + ux, cy: t.a.y + uy, r2: ux * ux + uy * uy };
+type Pt = { x: number; y: number };
+
+export function cross(o: Pt, a: Pt, b: Pt): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
-function sharedEdge(t: BWTri, ea: BWPt, eb: BWPt): boolean {
-  const edges: [BWPt, BWPt][] = [[t.a,t.b],[t.b,t.c],[t.c,t.a]];
-  return edges.some(([p,q]) => (p===ea&&q===eb)||(p===eb&&q===ea));
+function distToSegment(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const t  = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
 }
 
-function bowyerWatson(pts: BWPt[]): BWTri[] {
-  const S = 50;
-  const sa: BWPt = { id:'__sa', x:-S, y:-S };
-  const sb: BWPt = { id:'__sb', x: S, y:-S };
-  const sc: BWPt = { id:'__sc', x: 0, y: S };
-  let tris: BWTri[] = [{ a:sa, b:sb, c:sc }];
-  const superIds = new Set(['__sa','__sb','__sc']);
-
-  for (const p of pts) {
-    const bad = tris.filter(t => {
-      const { cx, cy, r2 } = circumcircle(t);
-      return (p.x-cx)**2 + (p.y-cy)**2 < r2 - 1e-10;
-    });
-    const boundary: [BWPt,BWPt][] = [];
-    for (const t of bad) {
-      for (const [ea,eb] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]] as [BWPt,BWPt][]) {
-        if (!bad.some(o => o!==t && sharedEdge(o,ea,eb))) boundary.push([ea,eb]);
-      }
-    }
-    tris = tris.filter(t => !bad.includes(t));
-    for (const [ea,eb] of boundary) tris.push({ a:ea, b:eb, c:p });
-  }
-
-  return tris.filter(t => ![t.a,t.b,t.c].some(v => superIds.has(v.id)));
+/** Proper crossing of segments ab and cd (touching at a shared dot doesn't count) */
+export function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+  const d1 = cross(c, d, a), d2 = cross(c, d, b);
+  const d3 = cross(a, b, c), d4 = cross(a, b, d);
+  return d1 * d2 < 0 && d3 * d4 < 0;
 }
 
 function generateTriangleBoard(size: GameSize) {
@@ -131,29 +112,61 @@ function generateTriangleBoard(size: GameSize) {
     attempts++;
     const x = pad + Math.random() * (1 - 2 * pad);
     const y = pad + Math.random() * (1 - 2 * pad);
-    if (dots.every(d => Math.hypot(d.x-x, d.y-y) >= minDist))
-      dots.push({ id:`d${dots.length}`, x, y });
+    const p = { x, y };
+    if (dots.some(d => Math.hypot(d.x-x, d.y-y) < minDist)) continue;
+    // Reject near-collinear triples so no line ever has to skim past a third
+    // dot, which would leave a sliver that can never be closed
+    if (dots.some((a, i) => dots.some((b, j) => j > i && (
+      distToSegment(p, a, b) < DOT_CLEARANCE ||
+      distToSegment(a, p, b) < DOT_CLEARANCE ||
+      distToSegment(b, p, a) < DOT_CLEARANCE)))) continue;
+    dots.push({ id:`d${dots.length}`, ...p });
   }
 
-  const triangles = bowyerWatson(dots.map(d => ({ id: d.id, x: d.x, y: d.y })));
+  return { dots, validEdges: computeTriangleEdges(dots, []), shapes: [] as GameShape[] };
+}
 
-  const edgeSet = new Set<string>();
-  const validEdges: Edge[] = [];
-  const shapes: GameShape[] = [];
+/** Drawn lines plus every undrawn pair that is still a legal move */
+export function computeTriangleEdges(dots: Dot[], drawnLines: DrawnLine[]): Edge[] {
+  const byId  = new Map(dots.map(d => [d.id, d]));
+  const drawn = new Set(drawnLines.map(l => l.id));
+  const edges: Edge[] = drawnLines.map(l => ({ id: l.id, dot1Id: l.dot1Id, dot2Id: l.dot2Id }));
 
-  for (let i = 0; i < triangles.length; i++) {
-    const { a, b, c } = triangles[i];
-    const e = [lineKey(a.id,b.id), lineKey(b.id,c.id), lineKey(a.id,c.id)];
-    for (const [idx,pair] of [[0,[a,b]],[1,[b,c]],[2,[a,c]]] as [number,[BWPt,BWPt]][]) {
-      if (!edgeSet.has(e[idx])) {
-        edgeSet.add(e[idx]);
-        validEdges.push({ id:e[idx], dot1Id:pair[0].id, dot2Id:pair[1].id });
-      }
+  for (let i = 0; i < dots.length; i++) {
+    for (let j = i + 1; j < dots.length; j++) {
+      const a = dots[i], b = dots[j];
+      const id = lineKey(a.id, b.id);
+      if (drawn.has(id)) continue;
+      if (dots.some(p => p !== a && p !== b && distToSegment(p, a, b) < DOT_CLEARANCE)) continue;
+      if (drawnLines.some(l => segmentsCross(a, b, byId.get(l.dot1Id)!, byId.get(l.dot2Id)!))) continue;
+      edges.push({ id, dot1Id: a.id, dot2Id: b.id });
     }
-    shapes.push({ id:`tri${i}`, dotIds:[a.id,b.id,c.id], edgeIds:e });
   }
+  return edges;
+}
 
-  return { dots, validEdges, shapes };
+/** Triangles closed by the new line: both other sides drawn, no dot inside */
+export function detectNewTriangles(dots: Dot[], drawnLines: DrawnLine[], newLine: Edge): GameShape[] {
+  const byId  = new Map(dots.map(d => [d.id, d]));
+  const drawn = new Set(drawnLines.map(l => l.id));
+  const a = byId.get(newLine.dot1Id)!, b = byId.get(newLine.dot2Id)!;
+  const found: GameShape[] = [];
+
+  for (const c of dots) {
+    if (c === a || c === b) continue;
+    if (!drawn.has(lineKey(a.id, c.id)) || !drawn.has(lineKey(b.id, c.id))) continue;
+    const s = Math.sign(cross(a, b, c));
+    const empty = dots.every(p => p === a || p === b || p === c ||
+      !(Math.sign(cross(a, b, p)) === s && Math.sign(cross(b, c, p)) === s && Math.sign(cross(c, a, p)) === s));
+    if (!empty) continue;
+    const ids = [a.id, b.id, c.id].sort();
+    found.push({
+      id: `tri_${ids.join('_')}`,
+      dotIds: [a.id, b.id, c.id],
+      edgeIds: [lineKey(a.id, b.id), lineKey(b.id, c.id), lineKey(a.id, c.id)],
+    });
+  }
+  return found;
 }
 
 // ── Shape Completion Detection ────────────────────────────────────────────────
