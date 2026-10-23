@@ -120,6 +120,50 @@ function bowyerWatson(pts: BWPt[]): BWTri[] {
   return tris.filter(t => ![t.a,t.b,t.c].some(v => superIds.has(v.id)));
 }
 
+function cross(o: BWPt, a: BWPt, b: BWPt): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+/**
+ * Bowyer-Watson with a finite super-triangle can drop triangles along the
+ * convex hull, leaving notches where two edges meet but the closing third
+ * edge is missing. Fill those notches with ear triangles until the outer
+ * boundary is convex.
+ */
+function fillHullGaps(pts: BWPt[], tris: BWTri[]): BWTri[] {
+  // Orient every triangle counter-clockwise (positive cross)
+  const out = tris.map(t => cross(t.a, t.b, t.c) < 0 ? { a: t.a, b: t.c, c: t.b } : t);
+
+  for (let guard = 0; guard < pts.length * 4; guard++) {
+    // Directed boundary edges: present in one triangle, reverse absent
+    const directed = new Set<string>();
+    for (const t of out)
+      for (const [p, q] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]]) directed.add(`${p.id}>${q.id}`);
+    const next = new Map<string, BWPt>();
+    const byId = new Map(pts.map(p => [p.id, p]));
+    for (const t of out)
+      for (const [p, q] of [[t.a,t.b],[t.b,t.c],[t.c,t.a]])
+        if (!directed.has(`${q.id}>${p.id}`)) next.set(p.id, q);
+
+    let added = false;
+    for (const [aId, b] of next) {
+      const a = byId.get(aId)!;
+      const c = next.get(b.id);
+      if (!c || c === a) continue;
+      // Reflex boundary vertex (right turn on a CCW boundary) → notch
+      if (cross(a, b, c) >= -1e-12) continue;
+      const empty = pts.every(p => p === a || p === b || p === c ||
+        !(cross(a, c, p) > 0 && cross(c, b, p) > 0 && cross(b, a, p) > 0));
+      if (!empty) continue;
+      out.push({ a, b: c, c: b });
+      added = true;
+      break;
+    }
+    if (!added) break;
+  }
+  return out;
+}
+
 function generateTriangleBoard(size: GameSize) {
   const n       = triDotCount(size);
   const minDist = triMinDist(size);
@@ -135,7 +179,8 @@ function generateTriangleBoard(size: GameSize) {
       dots.push({ id:`d${dots.length}`, x, y });
   }
 
-  const triangles = bowyerWatson(dots.map(d => ({ id: d.id, x: d.x, y: d.y })));
+  const pts       = dots.map(d => ({ id: d.id, x: d.x, y: d.y }));
+  const triangles = fillHullGaps(pts, bowyerWatson(pts));
 
   const edgeSet = new Set<string>();
   const validEdges: Edge[] = [];
