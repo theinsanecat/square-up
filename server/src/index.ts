@@ -10,8 +10,7 @@ import {
   DrawnLine, BotDifficulty,
 } from './types';
 import {
-  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner,
-  computeTriangleEdges, detectNewTriangles,
+  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner
 } from './gameLogic';
 import { chooseBotMove } from './bot';
 
@@ -275,14 +274,7 @@ function applyMove(state: GameState, playerId: string, dot1Id: string, dot2Id: s
   state.drawnLines.push(newLine);
 
   // Detect completed shapes
-  let completed;
-  if (state.config.shapeMode === 'triangle') {
-    completed = detectNewTriangles(state.dots, state.drawnLines, newLine);
-    state.shapes.push(...completed);
-    state.validEdges = computeTriangleEdges(state.dots, state.drawnLines);
-  } else {
-    completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
-  }
+  const completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
   for (const s of completed) {
     s.winnerId   = playerId;
     s.winnerColor = currentPlayer.color;
