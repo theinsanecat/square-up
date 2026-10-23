@@ -164,19 +164,34 @@ export function computeTriangleEdges(dots: Dot[], drawnLines: DrawnLine[]): Edge
       const a = dots[i], b = dots[j];
       const id = lineKey(a.id, b.id);
       if (drawn.has(id)) continue;
-      // A long line is only allowed when it closes a triangle that's already
-      // been started, and can never end up as the side of a thin sliver
-      if (Math.hypot(a.x - b.x, a.y - b.y) > maxLen) {
-        const others = dots.filter(c => c !== a && c !== b && triangleIsEmpty(dots, a, b, c));
-        const closes = others.some(c => drawn.has(lineKey(a.id, c.id)) && drawn.has(lineKey(b.id, c.id)));
-        if (!closes || others.some(c => minAngle(a, b, c) < MIN_CLOSING_ANGLE)) continue;
-      }
-      if (dots.some(p => p !== a && p !== b && distToSegment(p, a, b) < DOT_CLEARANCE)) continue;
-      if (drawnLines.some(l => segmentsCross(a, b, byId.get(l.dot1Id)!, byId.get(l.dot2Id)!))) continue;
-      edges.push({ id, dot1Id: a.id, dot2Id: b.id });
+      if (lineIsLegal(dots, byId, drawn, drawnLines, maxLen, a, b))
+        edges.push({ id, dot1Id: a.id, dot2Id: b.id });
     }
   }
   return edges;
+}
+
+/** Whether the undrawn line a–b is a legal move (same rules as computeTriangleEdges) */
+export function isLegalTriangleLine(dots: Dot[], drawnLines: DrawnLine[], a: Dot, b: Dot): boolean {
+  const byId = new Map(dots.map(d => [d.id, d]));
+  const drawn = new Set(drawnLines.map(l => l.id));
+  return lineIsLegal(dots, byId, drawn, drawnLines, maxLineLength(dots), a, b);
+}
+
+function lineIsLegal(
+  dots: Dot[], byId: Map<string, Dot>, drawn: Set<string>, drawnLines: DrawnLine[],
+  maxLen: number, a: Dot, b: Dot,
+): boolean {
+  // A long line is only allowed when it closes a triangle that's already
+  // been started, and can never end up as the side of a thin sliver
+  if (Math.hypot(a.x - b.x, a.y - b.y) > maxLen) {
+    const others = dots.filter(c => c !== a && c !== b && triangleIsEmpty(dots, a, b, c));
+    const closes = others.some(c => drawn.has(lineKey(a.id, c.id)) && drawn.has(lineKey(b.id, c.id)));
+    if (!closes || others.some(c => minAngle(a, b, c) < MIN_CLOSING_ANGLE)) return false;
+  }
+  if (dots.some(p => p !== a && p !== b && distToSegment(p, a, b) < DOT_CLEARANCE)) return false;
+  if (drawnLines.some(l => segmentsCross(a, b, byId.get(l.dot1Id)!, byId.get(l.dot2Id)!))) return false;
+  return true;
 }
 
 /** Smallest corner angle of a triangle, in degrees */
