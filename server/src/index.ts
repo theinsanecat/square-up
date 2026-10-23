@@ -10,7 +10,8 @@ import {
   DrawnLine,
 } from './types';
 import {
-  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner
+  generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner,
+  computeTriangleEdges, detectNewTriangles,
 } from './gameLogic';
 
 // ── Express + Socket.io setup ─────────────────────────────────────────────────
@@ -164,7 +165,14 @@ io.on('connection', (socket: Socket) => {
     state.drawnLines.push(newLine);
 
     // Detect completed shapes
-    const completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
+    let completed;
+    if (state.config.shapeMode === 'triangle') {
+      completed = detectNewTriangles(state.dots, state.drawnLines, newLine);
+      state.shapes.push(...completed);
+      state.validEdges = computeTriangleEdges(state.dots, state.drawnLines);
+    } else {
+      completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
+    }
     for (const s of completed) {
       s.winnerId   = socket.id;
       s.winnerColor = currentPlayer.color;
