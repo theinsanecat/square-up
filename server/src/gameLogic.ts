@@ -84,7 +84,7 @@ const DOT_CLEARANCE = 0.006;
 
 type Pt = { x: number; y: number };
 
-function cross(o: Pt, a: Pt, b: Pt): number {
+export function cross(o: Pt, a: Pt, b: Pt): number {
   return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
@@ -95,7 +95,7 @@ function distToSegment(p: Pt, a: Pt, b: Pt): number {
 }
 
 /** Proper crossing of segments ab and cd (touching at a shared dot doesn't count) */
-function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
+export function segmentsCross(a: Pt, b: Pt, c: Pt, d: Pt): boolean {
   const d1 = cross(c, d, a), d2 = cross(c, d, b);
   const d3 = cross(a, b, c), d4 = cross(a, b, d);
   return d1 * d2 < 0 && d3 * d4 < 0;

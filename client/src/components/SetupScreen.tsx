@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type {
   GameState, Player, PlayerColor, StampType, GameConfig,
-  ShapeMode, GameSize,
+  ShapeMode, GameSize, BotDifficulty,
 } from '../types/game';
 import { COLOR_MAP, STAMP_LABELS } from '../types/game';
 
@@ -10,6 +10,15 @@ const STAMPS: StampType[]   = ['heart', 'star', 'flower', 'diamond'];
 const SIZES: GameSize[]     = ['small', 'medium', 'big'];
 const SIZE_LABELS: Record<GameSize, string> = {
   small: 'Small', medium: 'Medium', big: 'Big'
+};
+const DIFFICULTIES: BotDifficulty[] = ['easy', 'medium', 'hard'];
+const DIFFICULTY_LABELS: Record<BotDifficulty, string> = {
+  easy: 'Easy', medium: 'Medium', hard: 'Hard',
+};
+const DIFFICULTY_DESC: Record<BotDifficulty, string> = {
+  easy:   'Makes mistakes',
+  medium: 'Plays it safe',
+  hard:   'Thinks ahead',
 };
 const SIZE_DESC: Record<GameSize, string> = {
   small:  'Quick game (~9 shapes)',
@@ -54,6 +63,8 @@ export default function SetupScreen({ gameState, myPlayer, onSetup, onHostConfig
   const [ready, setReady]   = useState(false);
   const [mode, setMode]     = useState<ShapeMode>(gameState.config.shapeMode);
   const [size, setSize]     = useState<GameSize>(gameState.config.size);
+  const [difficulty, setDifficulty] = useState<BotDifficulty>(gameState.config.botDifficulty ?? 'medium');
+  const isSolo = gameState.players.some(p => p.isBot);
 
   // Sync when opponent's state arrives
   useEffect(() => {
@@ -67,8 +78,8 @@ export default function SetupScreen({ gameState, myPlayer, onSetup, onHostConfig
 
   // Host emits config changes
   useEffect(() => {
-    if (isHost) onHostConfig({ shapeMode: mode, size });
-  }, [mode, size]);
+    if (isHost) onHostConfig({ shapeMode: mode, size, ...(isSolo ? { botDifficulty: difficulty } : {}) });
+  }, [mode, size, difficulty]);
 
   const opponent = gameState.players.find(p => p.id !== myPlayer?.id);
   const waiting  = gameState.players.length < 2;
@@ -89,7 +100,9 @@ export default function SetupScreen({ gameState, myPlayer, onSetup, onHostConfig
       {/* Header */}
       <div className="setup-header">
         <div className="logo-title-sm">Square<span>Up</span></div>
-        <div className="room-chip">Room: <strong>{gameState.roomCode}</strong></div>
+        {isSolo
+          ? <div className="room-chip">vs <strong>Computer</strong></div>
+          : <div className="room-chip">Room: <strong>{gameState.roomCode}</strong></div>}
       </div>
 
       <div className="setup-body">
@@ -134,6 +147,24 @@ export default function SetupScreen({ gameState, myPlayer, onSetup, onHostConfig
               ))}
             </div>
           </div>
+
+          {isSolo && (
+            <div className="config-row">
+              <h3>Computer Difficulty</h3>
+              <div className="size-btns">
+                {DIFFICULTIES.map(d => (
+                  <button
+                    key={d}
+                    className={`size-btn ${difficulty===d?'active':''}`}
+                    onClick={() => setDifficulty(d)}
+                  >
+                    <strong>{DIFFICULTY_LABELS[d]}</strong>
+                    <span>{DIFFICULTY_DESC[d]}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── Players side by side ──────────────────────── */}
@@ -203,7 +234,7 @@ export default function SetupScreen({ gameState, myPlayer, onSetup, onHostConfig
                       onClick={() => setReady(r => !r)}
                       disabled={waiting}
                     >
-                      {ready ? 'Ready!' : waiting ? 'Waiting for opponent…' : 'Mark as Ready'}
+                      {ready ? 'Ready!' : waiting ? 'Waiting for opponent…' : isSolo ? 'Start Game' : 'Mark as Ready'}
                     </button>
                   </>
                 )}

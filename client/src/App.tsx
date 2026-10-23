@@ -33,7 +33,7 @@ const TriModeIcon = () => (
 export default function App() {
   const {
     connected, gameState, myPlayerId, myPlayer, error, opponentLeft, gameEndedByHost,
-    createRoom, joinRoom, sendSetup, sendHostConfig, drawLine,
+    createRoom, createSoloRoom, joinRoom, sendSetup, sendHostConfig, drawLine,
     requestRematch, restartToSetup, endGame, clearError,
   } = useSocket();
 
@@ -62,7 +62,7 @@ export default function App() {
   if (!gameState || gameState.status === 'waiting') {
     return (
       <>
-        <LandingPage onCreateRoom={createRoom} onJoinRoom={joinRoom} error={error} connected={connected} />
+        <LandingPage onCreateRoom={createRoom} onCreateSoloRoom={createSoloRoom} onJoinRoom={joinRoom} error={error} connected={connected} />
 
         {gameState?.status === 'waiting' && gameState.players.length === 1 && (
           <div className="waiting-overlay">
@@ -94,6 +94,7 @@ export default function App() {
   // ── Playing / Finished ─────────────────────────────────────────────────────
   if (gameState.status === 'playing' || gameState.status === 'finished') {
     const isHost = myPlayer?.isHost ?? false;
+    const isSolo = gameState.players.some(p => p.isBot);
 
     return (
       <div className="game-screen">
@@ -102,7 +103,9 @@ export default function App() {
           <div className="logo-title-sm">Square<span>Up</span></div>
 
           <div className="topbar-center">
-            <div className="room-chip">Room: <strong>{gameState.roomCode}</strong></div>
+            {isSolo
+              ? <div className="room-chip">vs <strong>Computer</strong></div>
+              : <div className="room-chip">Room: <strong>{gameState.roomCode}</strong></div>}
             <div className="topbar-mode">
               {gameState.config.shapeMode === 'square' ? <SquareModeIcon /> : <TriModeIcon />}
               {gameState.config.shapeMode === 'square' ? 'Squares' : 'Triangles'}

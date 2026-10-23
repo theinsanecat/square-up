@@ -6,13 +6,14 @@ import {
   GameState, Player, GameConfig, GameStatus,
   PlayerColor, StampType,
   CreateRoomPayload, JoinRoomPayload, PlayerSetupPayload,
-  HostConfigPayload, DrawLinePayload,
-  DrawnLine,
+  HostConfigPayload, DrawLinePayload, CreateSoloRoomPayload,
+  DrawnLine, BotDifficulty,
 } from './types';
 import {
   generateBoard, lineKey, detectCompletedShapes, isBoardComplete, determineWinner,
   computeTriangleEdges, detectNewTriangles,
 } from './gameLogic';
+import { chooseBotMove } from './bot';
 
 // ── Express + Socket.io setup ─────────────────────────────────────────────────
 
@@ -53,6 +54,34 @@ function makePlayer(socketId: string, name: string, isHost: boolean): Player {
   };
 }
 
+const BOT_COLORS: PlayerColor[] = ['blue', 'green', 'pink', 'yellow', 'purple'];
+const BOT_STAMPS: StampType[]   = ['star', 'diamond', 'flower', 'heart'];
+const BOT_MOVE_DELAY_MS = 700;
+
+function makeBot(roomCode: string): Player {
+  const id = `bot-${roomCode}`;
+  return {
+    id,
+    socketId: id,
+    name: 'Computer',
+    color: 'blue',
+    stamp: 'star',
+    score: 0,
+    isHost: false,
+    isReady: true,
+    isBot: true,
+  };
+}
+
+/** Keep the bot's color and stamp different from the human's */
+function adjustBotLook(state: GameState) {
+  const bot   = state.players.find(p => p.isBot);
+  const human = state.players.find(p => !p.isBot);
+  if (!bot || !human) return;
+  if (bot.color === human.color) bot.color = BOT_COLORS.find(c => c !== human.color)!;
+  if (bot.stamp === human.stamp) bot.stamp = BOT_STAMPS.find(s => s !== human.stamp)!;
+}
+
 function defaultConfig(): GameConfig {
   return { shapeMode: 'square', size: 'small' };
 }
@@ -87,13 +116,27 @@ io.on('connection', (socket: Socket) => {
     console.log(`[room] created ${code} by ${socket.id}`);
   });
 
+  // ── Create solo room (vs computer) ─────────────────────────────────────────
+  socket.on('create-solo-room', ({ playerName, difficulty }: CreateSoloRoomPayload) => {
+    const code   = makeRoomCode();
+    const player = makePlayer(socket.id, playerName, true);
+    const state  = emptyGameState(code, player);
+    state.players.push(makeBot(code));
+    state.config.botDifficulty = difficulty ?? 'medium';
+    state.status = 'setup';
+    rooms.set(code, state);
+    socket.join(code);
+    socket.emit('room-created', { roomCode: code, playerId: socket.id, gameState: state });
+    console.log(`[room] solo ${code} created by ${socket.id}`);
+  });
+
   // ── Join room ───────────────────────────────────────────────────────────────
   socket.on('join-room', ({ roomCode, playerName }: JoinRoomPayload) => {
     const state = rooms.get(roomCode);
     if (!state) {
       socket.emit('error', { message: 'Room not found.' }); return;
     }
-    if (state.players.length >= 2) {
+    if (state.players.length >= 2 || state.players.some(p => p.isBot)) {
       socket.emit('error', { message: 'Room is full.' }); return;
     }
     if (state.status !== 'waiting') {
@@ -116,7 +159,7 @@ io.on('connection', (socket: Socket) => {
     if (!state) return;
     const host = state.players.find(p => p.isHost);
     if (!host || host.socketId !== socket.id) return;
-    state.config = config;
+    state.config = { ...state.config, ...config };
     io.to(state.roomCode).emit('config-updated', { gameState: state });
   });
 
@@ -129,6 +172,7 @@ io.on('connection', (socket: Socket) => {
     player.color   = color;
     player.stamp   = stamp;
     player.isReady = isReady;
+    adjustBotLook(state);
 
     io.to(state.roomCode).emit('setup-updated', { gameState: state });
 
@@ -145,64 +189,8 @@ io.on('connection', (socket: Socket) => {
     if (state.currentPlayerId !== socket.id) {
       socket.emit('error', { message: "It's not your turn." }); return;
     }
-
-    const edgeId = lineKey(dot1Id, dot2Id);
-    const valid  = state.validEdges.find(e => e.id === edgeId);
-    if (!valid) {
-      socket.emit('error', { message: 'Invalid move.' }); return;
-    }
-    if (state.drawnLines.find(l => l.id === edgeId)) {
-      socket.emit('error', { message: 'Line already drawn.' }); return;
-    }
-
-    const currentPlayer = state.players.find(p => p.socketId === socket.id)!;
-    const newLine: DrawnLine = {
-      id: edgeId,
-      dot1Id, dot2Id,
-      playerId: socket.id,
-      playerColor: currentPlayer.color,
-    };
-    state.drawnLines.push(newLine);
-
-    // Detect completed shapes
-    let completed;
-    if (state.config.shapeMode === 'triangle') {
-      completed = detectNewTriangles(state.dots, state.drawnLines, newLine);
-      state.shapes.push(...completed);
-      state.validEdges = computeTriangleEdges(state.dots, state.drawnLines);
-    } else {
-      completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
-    }
-    for (const s of completed) {
-      s.winnerId   = socket.id;
-      s.winnerColor = currentPlayer.color;
-      s.winnerStamp = currentPlayer.stamp;
-      currentPlayer.score++;
-    }
-
-    // Check board complete
-    const done = isBoardComplete(state.validEdges, state.drawnLines);
-
-    // Bonus turn: If player completed 1 or more shapes, they keep their turn!
-    // Otherwise, switch turn to opponent.
-    if (completed.length === 0) {
-      const other = state.players.find(p => p.socketId !== socket.id);
-      state.currentPlayerId = other?.socketId ?? socket.id;
-    }
-
-    if (done) {
-      state.status  = 'finished';
-      const winnerId = determineWinner(state.players, state.shapes);
-      state.winnerId = winnerId ?? undefined;
-      io.to(state.roomCode).emit('game-over', { gameState: state, winnerId });
-      console.log(`[game] ${state.roomCode} over. winner=${winnerId}`);
-    } else {
-      io.to(state.roomCode).emit('line-drawn', {
-        line: newLine,
-        completedShapes: completed,
-        gameState: state,
-      });
-    }
+    const err = applyMove(state, socket.id, dot1Id, dot2Id);
+    if (err) socket.emit('error', { message: err });
   });
 
   // ── Rematch ─────────────────────────────────────────────────────────────────
@@ -212,7 +200,7 @@ io.on('connection', (socket: Socket) => {
     // Reset to setup phase
     for (const p of state.players) {
       p.score   = 0;
-      p.isReady = false;
+      p.isReady = !!p.isBot;
     }
     state.dots        = [];
     state.validEdges  = [];
@@ -230,7 +218,7 @@ io.on('connection', (socket: Socket) => {
     if (!state) return;
     const player = state.players.find(p => p.socketId === socket.id);
     if (!player?.isHost) return;
-    for (const p of state.players) { p.score = 0; p.isReady = false; }
+    for (const p of state.players) { p.score = 0; p.isReady = !!p.isBot; }
     state.dots = []; state.validEdges = []; state.shapes = [];
     state.drawnLines = []; state.status = 'setup'; state.winnerId = undefined;
     state.currentPlayerId = state.players[0].socketId;
@@ -258,7 +246,7 @@ io.on('connection', (socket: Socket) => {
     socket.to(state.roomCode).emit('opponent-left', { message: 'Opponent disconnected.' });
     // Clean up room if host leaves or only one player
     state.players = state.players.filter(p => p.socketId !== socket.id);
-    if (state.players.length === 0) {
+    if (state.players.every(p => p.isBot)) {
       rooms.delete(state.roomCode);
     } else {
       // Remaining player becomes host
@@ -267,6 +255,89 @@ io.on('connection', (socket: Socket) => {
     }
   });
 });
+
+// ── Moves ─────────────────────────────────────────────────────────────────────
+
+/** Apply a move for playerId. Returns an error message if the move is rejected. */
+function applyMove(state: GameState, playerId: string, dot1Id: string, dot2Id: string): string | null {
+  const edgeId = lineKey(dot1Id, dot2Id);
+  const valid  = state.validEdges.find(e => e.id === edgeId);
+  if (!valid) return 'Invalid move.';
+  if (state.drawnLines.find(l => l.id === edgeId)) return 'Line already drawn.';
+
+  const currentPlayer = state.players.find(p => p.id === playerId)!;
+  const newLine: DrawnLine = {
+    id: edgeId,
+    dot1Id, dot2Id,
+    playerId,
+    playerColor: currentPlayer.color,
+  };
+  state.drawnLines.push(newLine);
+
+  // Detect completed shapes
+  let completed;
+  if (state.config.shapeMode === 'triangle') {
+    completed = detectNewTriangles(state.dots, state.drawnLines, newLine);
+    state.shapes.push(...completed);
+    state.validEdges = computeTriangleEdges(state.dots, state.drawnLines);
+  } else {
+    completed = detectCompletedShapes(state.shapes, state.drawnLines, edgeId);
+  }
+  for (const s of completed) {
+    s.winnerId   = playerId;
+    s.winnerColor = currentPlayer.color;
+    s.winnerStamp = currentPlayer.stamp;
+    currentPlayer.score++;
+  }
+
+  // Check board complete
+  const done = isBoardComplete(state.validEdges, state.drawnLines);
+
+  // Bonus turn: If player completed 1 or more shapes, they keep their turn!
+  // Otherwise, switch turn to opponent.
+  if (completed.length === 0) {
+    const other = state.players.find(p => p.id !== playerId);
+    state.currentPlayerId = other?.id ?? playerId;
+  }
+
+  if (done) {
+    state.status  = 'finished';
+    const winnerId = determineWinner(state.players, state.shapes);
+    state.winnerId = winnerId ?? undefined;
+    io.to(state.roomCode).emit('game-over', { gameState: state, winnerId });
+    console.log(`[game] ${state.roomCode} over. winner=${winnerId}`);
+  } else {
+    io.to(state.roomCode).emit('line-drawn', {
+      line: newLine,
+      completedShapes: completed,
+      gameState: state,
+    });
+    scheduleBotTurn(state);
+  }
+  return null;
+}
+
+/** If it's the computer's turn, play after a short pause so the human can follow along */
+function scheduleBotTurn(state: GameState) {
+  const bot = state.players.find(p => p.isBot);
+  if (!bot || state.currentPlayerId !== bot.id || state.status !== 'playing') return;
+  const lineCount = state.drawnLines.length;
+  setTimeout(() => {
+    // Bail if the game was reset, ended, or moved on meanwhile
+    if (rooms.get(state.roomCode) !== state) return;
+    if (state.status !== 'playing' || state.currentPlayerId !== bot.id) return;
+    if (state.drawnLines.length !== lineCount) return;
+    const difficulty: BotDifficulty = state.config.botDifficulty ?? 'medium';
+    const edge = chooseBotMove({
+      shapeMode:  state.config.shapeMode,
+      dots:       state.dots,
+      validEdges: state.validEdges,
+      shapes:     state.shapes,
+      drawnLines: state.drawnLines,
+    }, difficulty);
+    if (edge) applyMove(state, bot.id, edge.dot1Id, edge.dot2Id);
+  }, BOT_MOVE_DELAY_MS);
+}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
@@ -287,6 +358,7 @@ function startGame(state: GameState) {
   // Host goes first
   state.currentPlayerId = state.players.find(p => p.isHost)?.socketId ?? state.players[0].socketId;
   io.to(state.roomCode).emit('game-started', { gameState: state });
+  scheduleBotTurn(state);
   console.log(`[game] started ${state.roomCode} mode=${state.config.shapeMode} size=${state.config.size}`);
 }
 

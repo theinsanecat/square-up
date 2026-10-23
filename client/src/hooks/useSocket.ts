@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type {
-  GameState, Player, PlayerColor, StampType, GameConfig, DrawnLine, GameShape
+  GameState, Player, PlayerColor, StampType, GameConfig, DrawnLine, GameShape, BotDifficulty
 } from '../types/game';
 
 const SERVER_URL = import.meta.env.VITE_SERVER_URL || 'http://localhost:3001';
@@ -67,6 +67,11 @@ export function useSocket() {
     setState(s => ({ ...s, error: null }));
   }, []);
 
+  const createSoloRoom = useCallback((playerName: string, difficulty: BotDifficulty) => {
+    socketRef.current?.emit('create-solo-room', { playerName, difficulty });
+    setState(s => ({ ...s, error: null }));
+  }, []);
+
   const joinRoom = useCallback((roomCode: string, playerName: string) => {
     socketRef.current?.emit('join-room', { roomCode: roomCode.toUpperCase(), playerName });
     setState(s => ({ ...s, error: null }));
@@ -103,6 +108,7 @@ export function useSocket() {
     ...state,
     myPlayer: state.gameState?.players.find(p => p.id === state.myPlayerId) as Player | undefined,
     createRoom,
+    createSoloRoom,
     joinRoom,
     sendSetup,
     sendHostConfig,
